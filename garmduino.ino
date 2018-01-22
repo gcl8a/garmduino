@@ -10,15 +10,14 @@
  * sequentially.
  */
 
-//#define USE_TRADITIONAL_SPI //someday I'll move this to a library
-//
-//#include <SPI.h>
-#include "wiring_private.h" // pinPeripheral() function
+//#include "wiring_private.h" // pinPeripheral() function
 
-#include <SD.h>
+#include <SdFat.h>
 #include <gps.h>
+#include <BME280.h>
+#include <LSM9DS1.h>
 
-const int chipSelect = 10;
+const int chipSelect = 9;
 
 char filename[16]; //12 characters max
 
@@ -27,14 +26,18 @@ char filename[16]; //12 characters max
  * Arduino pin 3 -> sercom 2:1* -> RX
  * Arduino pin 4 -> sercom 2:0* -> TX
  */
-Uart gpsSerial (&sercom2, 3, 4, SERCOM_RX_PAD_1, UART_TX_PAD_0);
+//Uart gpsSerial (&sercom2, 3, 4, SERCOM_RX_PAD_1, UART_TX_PAD_0);
 
-GPS_MTK3339 gps1(&Serial1);
+GPS_EM506 gps(&Serial1);
+BME280 altimeter280;
+LSM9DS1 imu;
 
-void SERCOM2_Handler()
-{
-  gpsSerial.IrqHandler();
-}
+//void SERCOM2_Handler()
+//{
+//  gpsSerial.IrqHandler();
+//}
+
+SdFat SD;
 
 void setup() 
 {
@@ -44,15 +47,15 @@ void setup()
   //while(!SerialUSB){}
   
   //assign pins 3 & 4 SERCOM functionality
-  gpsSerial.begin(9600);
-  pinPeripheral(3, PIO_SERCOM_ALT);
-  pinPeripheral(4, PIO_SERCOM_ALT);
+//  gpsSerial.begin(9600);
+//  pinPeripheral(3, PIO_SERCOM_ALT);
+//  pinPeripheral(4, PIO_SERCOM_ALT);
 
   Serial1.begin(9600);
 
   delay(2000);
 
-  gps1.Init();
+  gps.Init();
   
   //set up sercom1 with SPI
 //  SPIClass spi1 (&sercom1, 12, 13, 11, SPI_PAD_0_SCK_1, SERCOM_RX_PAD_3);
@@ -73,20 +76,20 @@ void setup()
   }
 
   SerialUSB.println(F("Setup complete."));
+
+  SerialUSB.println(F("Checking for signal."));
+  SerialUSB.println(F("Press return at any time to skip file on fix.\n"));
+  while(!(gps.CheckSerial() & RMC) && !SerialUSB.available()) {}
+
+  GPSDatum gpsDatum = gps.GetReading();  
   
-  SerialUSB.println(F("Waiting for signal."));
-
-  while(!(gps1.CheckSerial() & RMC)) {} //keep checking until we get a fix
-  SerialUSB.println(F("Fix."));
-
   //now we have a fix -- make a filename
-  int monthday = gps1.GetReading().MakeMonthDay();
   int fileCount = 0;
-  int fileSuccess = 0;
+  bool fileSuccess = false;
   
   while(!fileSuccess)
   {
-    sprintf(filename, "%04i%04i.csv", monthday, fileCount);
+    sprintf(filename, "%02i%02i%04i.csv", gpsDatum.month, gpsDatum.day, fileCount);
     if(SD.exists(filename))
     {
       fileCount++;
@@ -97,7 +100,22 @@ void setup()
     }
   }
 
-  gps1.SendNMEA("PMTK314,0,5,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
+  //no longer need RMC
+  gps.SetActiveNMEAStrings(GGA);
+  //gps.SetReportTime(2000);
+  //gps.SendNMEA("PMTK314,0,5,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
+
+  SerialUSB.println("Altimeter...");
+  //start the altimeter running...(could toggle on GPS, when active)
+//  altimeter3115.toggleOneShot();
+
+  BME280Settings settings; //use the defaults
+  altimeter280.Init(settings);
+  altimeter280.ForceReading();
+
+  SerialUSB.println("IMU...");
+  IMUSettings imuSettings; //use defaults
+  imu.Init(imuSettings);
 
   SerialUSB.println(filename);
   SerialUSB.println(F("Done."));
@@ -105,20 +123,26 @@ void setup()
 
 void loop() 
 {
-  if(gps1.CheckSerial() == (GGA | RMC)) //careful on the comparison, both GGA and RMC must be enabled
+  if(gps.CheckSerial() & GGA) //if we have a GGA
   {
-    //gps1.ReadTemperature();
-    WriteSD(filename, gps1.GetReading().MakeShortDataString());  
+    String reportStr = gps.GetReading().MakeDataString() + ','
+                    + altimeter280.MakeDataString() + ','
+                    + imu.CalcRPY().MakeDataString();
+
+    WriteSD(filename, reportStr);  
+  }
+
+  if(imu.IsAvailableAccelAndGyro())
+  {
+    imu.ProcessReadings();
+  }
+
+  if(altimeter280.CheckForNewDatum())
+  {
+    altimeter280.ReadDatum();
+    altimeter280.ForceReading();
   }
 }
-//
-//float GetTemperature(int pin)
-//{
-//  int adc = analogRead(pin);
-//  float temperature = (((adc / 1024.) * 5.0) - 1.375) / 0.0225;
-//
-//  return temperature;
-//}
 
 int WriteSD(String filename, String str)
 {
