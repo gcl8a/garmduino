@@ -41,9 +41,15 @@ SdFat SD;
 
 void setup() 
 {
-  delay(3000);
+  delay(2000);
   SerialUSB.begin(115200);
   SerialUSB.println("Hej.");
+
+  pinMode(10, OUTPUT);
+  digitalWrite(10, HIGH);
+  pinMode(7, OUTPUT);
+  digitalWrite(7, HIGH);
+  
   //while(!SerialUSB){}
   
   //assign pins 3 & 4 SERCOM functionality
@@ -70,7 +76,7 @@ void setup()
   SerialUSB.print(F("Initializing SD card..."));
 
   // see if the card is present and can be initialized:
-  if (!SD.begin(chipSelect)) 
+  if (!SD.begin(chipSelect, SPI_QUARTER_SPEED)) 
   {
     SerialUSB.println(F("Card failed."));
   }
@@ -147,7 +153,7 @@ void loop()
 int WriteSD(String filename, String str)
 {
   SerialUSB.println(str);
-  File dataFile = SD.open(filename, FILE_WRITE);
+  File dataFile = SD.open(filename, O_WRITE | O_CREAT | O_APPEND);
 
   // if the file is available, write to it:
   if (dataFile) 
