@@ -10,14 +10,18 @@
  * sequentially.
  */
 
-//#include "wiring_private.h" // pinPeripheral() function
+#ifdef SERIAL_PORT_MONITOR
+  #define SerialMonitor SERIAL_PORT_MONITOR
+#else
+  #define SerialMonitor SerialUSB
+#endif
 
 #include <SdFat.h>
 #include <gps.h>
 #include <BME280.h>
 #include <LSM9DS1.h>
 
-const int chipSelect = 9;
+const int SD_CS = 10;
 
 char filename[16]; //12 characters max
 
@@ -28,7 +32,7 @@ char filename[16]; //12 characters max
  */
 //Uart gpsSerial (&sercom2, 3, 4, SERCOM_RX_PAD_1, UART_TX_PAD_0);
 
-GPS_EM506 gps(&Serial1);
+GPS_JF2 gps(&Serial);
 BME280 altimeter280;
 LSM9DS1 imu;
 
@@ -42,13 +46,13 @@ SdFat SD;
 void setup() 
 {
   delay(2000);
-  SerialUSB.begin(115200);
-  SerialUSB.println("Hej.");
+  SerialMonitor.begin(115200);
+  SerialMonitor.println("Hej.");
 
-  pinMode(10, OUTPUT);
-  digitalWrite(10, HIGH);
-  pinMode(7, OUTPUT);
-  digitalWrite(7, HIGH);
+//  pinMode(10, OUTPUT);
+//  digitalWrite(10, HIGH);
+//  pinMode(7, OUTPUT);
+//  digitalWrite(7, HIGH);
   
   //while(!SerialUSB){}
   
@@ -56,8 +60,6 @@ void setup()
 //  gpsSerial.begin(9600);
 //  pinPeripheral(3, PIO_SERCOM_ALT);
 //  pinPeripheral(4, PIO_SERCOM_ALT);
-
-  Serial1.begin(9600);
 
   delay(2000);
 
@@ -73,19 +75,19 @@ void setup()
 //  pinPeripheral(12, PIO_SERCOM);
 //  pinPeripheral(13, PIO_SERCOM);
 
-  SerialUSB.print(F("Initializing SD card..."));
+  SerialMonitor.print(F("Initializing SD card..."));
 
   // see if the card is present and can be initialized:
-  if (!SD.begin(chipSelect, SPI_QUARTER_SPEED)) 
+  if (!SD.begin(SD_CS, SPI_QUARTER_SPEED)) 
   {
-    SerialUSB.println(F("Card failed."));
+    SerialMonitor.println(F("Card failed."));
   }
 
-  SerialUSB.println(F("Setup complete."));
+  SerialMonitor.println(F("Setup complete."));
 
-  SerialUSB.println(F("Checking for signal."));
-  SerialUSB.println(F("Press return at any time to skip file on fix.\n"));
-  while(!(gps.CheckSerial() & RMC) && !SerialUSB.available()) {}
+  SerialMonitor.println(F("Checking for signal."));
+  SerialMonitor.println(F("Press return at any time to skip file on fix.\n"));
+  while(!(gps.CheckSerial() & RMC) && !SerialMonitor.available()) {}
 
   GPSDatum gpsDatum = gps.GetReading();  
   
@@ -107,11 +109,11 @@ void setup()
   }
 
   //no longer need RMC
-  gps.SetActiveNMEAStrings(GGA);
+  //gps.SetActiveNMEAStrings(GGA);
   //gps.SetReportTime(2000);
   //gps.SendNMEA("PMTK314,0,5,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
 
-  SerialUSB.println("Altimeter...");
+  SerialMonitor.println("Altimeter...");
   //start the altimeter running...(could toggle on GPS, when active)
 //  altimeter3115.toggleOneShot();
 
@@ -119,12 +121,12 @@ void setup()
   altimeter280.Init(settings);
   altimeter280.ForceReading();
 
-  SerialUSB.println("IMU...");
+  SerialMonitor.println("IMU...");
   IMUSettings imuSettings; //use defaults
   imu.Init(imuSettings);
 
-  SerialUSB.println(filename);
-  SerialUSB.println(F("Done."));
+  SerialMonitor.println(filename);
+  SerialMonitor.println(F("Done."));
 }
 
 void loop() 
@@ -152,7 +154,7 @@ void loop()
 
 int WriteSD(String filename, String str)
 {
-  SerialUSB.println(str);
+  SerialMonitor.println(str);
   File dataFile = SD.open(filename, O_WRITE | O_CREAT | O_APPEND);
 
   // if the file is available, write to it:
@@ -168,8 +170,9 @@ int WriteSD(String filename, String str)
   // if the file isn't open, pop up an error:
   else 
   {
-    SerialUSB.print(F("Error opening file: "));
-    SerialUSB.println(filename);
+    SerialMonitor.print(F("Error opening file: "));
+    SerialMonitor.println(filename);
+    
     return 0;
   }
 }
