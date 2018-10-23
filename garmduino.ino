@@ -10,11 +10,13 @@
  * sequentially.
  */
 
-#ifdef SERIAL_PORT_MONITOR
-  #define SerialMonitor SERIAL_PORT_MONITOR
-#else
-  #define SerialMonitor SerialUSB
-#endif
+#include <TinyScreen.h>
+//define the display
+TinyScreen display = TinyScreen(TinyScreenPlus);
+
+#include <event_timer.h>
+
+#define SerialMonitor SerialUSB
 
 #include <SdFat.h>
 #include <gps.h>
@@ -23,7 +25,7 @@
 
 const int SD_CS = 10;
 
-char filename[16]; //12 characters max
+String filename;
 
 /*
  * setup serial for the GPS on SERCOM2: 
@@ -36,44 +38,17 @@ GPS_JF2 gps(&Serial);
 BME280 altimeter280;
 LSM9DS1 imu;
 
-//void SERCOM2_Handler()
-//{
-//  gpsSerial.IrqHandler();
-//}
-
 SdFat SD;
+
+uint8_t screenState = ON;
+Timer screenTimer;
 
 void setup() 
 {
   delay(2000);
   SerialMonitor.begin(115200);
+  //while(!SerialMonitor) {};
   SerialMonitor.println("Hej.");
-
-//  pinMode(10, OUTPUT);
-//  digitalWrite(10, HIGH);
-//  pinMode(7, OUTPUT);
-//  digitalWrite(7, HIGH);
-  
-  //while(!SerialUSB){}
-  
-  //assign pins 3 & 4 SERCOM functionality
-//  gpsSerial.begin(9600);
-//  pinPeripheral(3, PIO_SERCOM_ALT);
-//  pinPeripheral(4, PIO_SERCOM_ALT);
-
-  delay(2000);
-
-  gps.Init();
-  
-  //set up sercom1 with SPI
-//  SPIClass spi1 (&sercom1, 12, 13, 11, SPI_PAD_0_SCK_1, SERCOM_RX_PAD_3);
-//
-//  spi1.begin(); //why first?????
-// 
-//  // Assign pins 11, 12, 13 to SERCOM functionality
-//  pinPeripheral(11, PIO_SERCOM);
-//  pinPeripheral(12, PIO_SERCOM);
-//  pinPeripheral(13, PIO_SERCOM);
 
   SerialMonitor.print(F("Initializing SD card..."));
 
@@ -82,36 +57,21 @@ void setup()
   {
     SerialMonitor.println(F("Card failed."));
   }
+  else SerialMonitor.println("done");
 
-  SerialMonitor.println(F("Setup complete."));
-
-  SerialMonitor.println(F("Checking for signal."));
-  SerialMonitor.println(F("Press return at any time to skip file on fix.\n"));
-  while(!(gps.CheckSerial() & RMC) && !SerialMonitor.available()) {}
-
-  GPSDatum gpsDatum = gps.GetReading();  
+  SerialMonitor.println(F("Init display"));
   
-  //now we have a fix -- make a filename
-  int fileCount = 0;
-  bool fileSuccess = false;
-  
-  while(!fileSuccess)
-  {
-    sprintf(filename, "%02i%02i%04i.csv", gpsDatum.month, gpsDatum.day, fileCount);
-    if(SD.exists(filename))
-    {
-      fileCount++;
-    }
-    else
-    {
-      fileSuccess = 1;
-    }
-  }
+  display.begin();
 
-  //no longer need RMC
-  //gps.SetActiveNMEAStrings(GGA);
-  //gps.SetReportTime(2000);
-  //gps.SendNMEA("PMTK314,0,5,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
+  //sets main current level, valid levels are 0-15
+  display.setBrightness(5);
+
+  PrintScreen("Hej.");
+
+  SerialMonitor.print(F("GPS..."));
+  gps.Init();
+  
+  filename = CreateNewFile();
 
   SerialMonitor.println("Altimeter...");
   //start the altimeter running...(could toggle on GPS, when active)
@@ -124,8 +84,12 @@ void setup()
   SerialMonitor.println("IMU...");
   IMUSettings imuSettings; //use defaults
   imu.Init(imuSettings);
+  display.clearScreen();
+  String message(filename);
+  PrintScreen(message);
 
-  SerialMonitor.println(filename);
+  screenTimer.Start(1000);
+
   SerialMonitor.println(F("Done."));
 }
 
@@ -136,6 +100,8 @@ void loop()
     String reportStr = gps.GetReading().MakeDataString() + ','
                     + altimeter280.MakeDataString() + ','
                     + imu.CalcRPY().MakeDataString();
+
+    reportStr += ',' + String(analogRead(A4) * 0.006445);
 
     WriteSD(filename, reportStr);  
   }
@@ -150,6 +116,53 @@ void loop()
     altimeter280.ReadDatum();
     altimeter280.ForceReading();
   }
+
+  static uint8_t llButtonPrev = 0;
+  uint8_t llButton = display.getButtons(TSButtonLowerLeft);
+  if(llButton != llButtonPrev)
+  { 
+    if(llButton) filename = CreateNewFile();
+    llButtonPrev = llButton;
+  }
+
+  static uint8_t urButtonPrev = 0;
+  uint8_t urButton = display.getButtons(TSButtonUpperRight);
+  if(urButton != urButtonPrev)
+  { 
+    if(urButton) 
+    {
+      if(screenState)
+      {
+        //turn it off
+        screenState = 0;
+        display.off();
+      }
+      else
+      {
+        //turn it on
+        screenState = 1;
+        display.on();
+      }
+    }
+    
+    urButtonPrev = urButton;
+  }
+
+  static uint8_t lrButtonPrev = 0;
+  uint8_t lrButton = display.getButtons(TSButtonLowerRight);
+  if(lrButton != lrButtonPrev)
+  { 
+    if(lrButton) TogglePower();
+    lrButtonPrev = lrButton;
+  }
+  
+  if(screenTimer.CheckExpired())
+  {
+    if(screenState) DrawScreen();
+    //SerialUSB.println(millis());
+    screenTimer.Restart();
+  }
+  
 }
 
 int WriteSD(String filename, String str)
@@ -176,4 +189,98 @@ int WriteSD(String filename, String str)
     return 0;
   }
 }
+
+int PrintScreen(String inputString)
+{
+  display.clearScreen();
+  display.setFont(thinPixel7_10ptFontInfo);
+  display.setCursor(0,10);
+  display.fontColor(TS_8b_Green,TS_8b_Black);
+  display.print(inputString);
+
+  display.setCursor(0,40);
+  display.fontColor(TS_8b_Blue,TS_8b_Black);
+  display.print(analogRead(A4));
+
+  return 0;
+}
+
+int DrawScreen(void)
+{
+  display.clearScreen();
+
+  //display the gps fix
+  int fix = gps.GetReading().gpsFix;
+  
+  display.drawRect(76, 10, 10, 10, TSRectangleFilled, fix == 2 ? TS_8b_Green : (fix == 1 ? TS_8b_Yellow : TS_8b_Red));
+
+  //filename
+  display.setFont(thinPixel7_10ptFontInfo);
+  display.setCursor(10, 20);
+  display.fontColor(TS_8b_Green,TS_8b_Black);
+  display.print(filename);
+
+  //battery level
+  display.setFont(thinPixel7_10ptFontInfo);
+  display.setCursor(10, 35);
+  display.fontColor(TS_8b_Blue,TS_8b_Black);
+  display.print(analogRead(A4) * 0.006445);
+
+  //altitude
+  display.setFont(thinPixel7_10ptFontInfo);
+  display.setCursor(10, 50);
+  display.fontColor(TS_8b_Green,TS_8b_Black);
+  display.print(altimeter280.GetReading().altitude);
+
+  return 0;
+}
+
+String CreateNewFile(void) //creates a new file of the form MMDDxxxx.csv; user can override GPS fix to get 0000xxxx.csv
+{
+  PrintScreen("Creating new file.");
+
+  //RMC has month and dat in it  
+  gps.SetActiveNMEAStrings(RMC);
+
+  SerialMonitor.println(F("Press return at any time to skip file on fix.\n"));
+  while(!(gps.CheckSerial() & RMC) && !display.getButtons(TSButtonUpperLeft)) {}
+
+  GPSDatum gpsDatum = gps.GetReading();
+  
+  //now we have a fix -- make a filename
+  int fileCount = 0;
+  bool fileSuccess = false;
+
+  char filename[16]; //12 characters max
+  while(!fileSuccess)
+  {
+    sprintf(filename, "%02i%02i%04i.csv", gpsDatum.month, gpsDatum.day, fileCount);
+    if(SD.exists(filename))
+    {
+      fileCount++;
+    }
+    else
+    {
+      fileSuccess = 1;
+    }
+  }
+
+  PrintScreen(filename);
+  
+  //no longer need RMC
+  gps.SetActiveNMEAStrings(GGA);
+
+  return String(filename);
+}
+
+void TogglePower(void)
+{
+  Serial.println("Power!");
+  gps.SetProtocol(GPS_BINARY);
+  delay(100);
+  gps.RequestTricklePower();
+  delay(100);
+  gps.SetProtocol(GPS_NMEA);
+}
+
 
